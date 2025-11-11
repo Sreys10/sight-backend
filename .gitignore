@@ -12,4 +12,6 @@ ENV/
 .env
 .env.local
 *.pem
+.railway/
+railpack-plan.json
 
