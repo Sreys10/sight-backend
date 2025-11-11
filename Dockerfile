@@ -17,9 +17,13 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY app.py .
 COPY image_detector.py .
 
-# Expose port
+# Copy start script
+COPY start.sh .
+RUN chmod +x start.sh
+
+# Expose port (default 5000, Railway will override via PORT env var)
 EXPOSE 5000
 
-# Use gunicorn to run the app
-CMD ["gunicorn", "app:app", "--bind", "0.0.0.0:5000", "--workers", "2", "--timeout", "120"]
+# Use start script to read PORT from environment
+CMD ["./start.sh"]
 

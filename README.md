@@ -73,6 +73,27 @@ If Nixpacks doesn't work, Railway can use the Dockerfile:
 - `GET /health` - Health check
 - `POST /detect` - Image detection (multipart/form-data with 'image' field)
 
+## Troubleshooting
+
+### Error: '$PORT' is not a valid port number
+
+If you see this error, it means Railway isn't expanding the PORT variable. The `start.sh` script should fix this. Make sure:
+
+1. `start.sh` is executable (it should be after git push)
+2. Procfile uses: `web: bash start.sh`
+3. If still having issues, Railway should auto-detect and use the start script
+
+### Alternative: Use Python start script
+
+If bash script doesn't work, you can use the Python alternative:
+
+1. Change Procfile to:
+   ```
+   web: python start.py
+   ```
+
+2. The `start.py` script reads PORT from environment and starts gunicorn
+
 ## Testing
 
 ```bash
