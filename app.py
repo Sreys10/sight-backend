@@ -16,6 +16,19 @@ API_USER = os.getenv('IMAGE_DETECTION_API_USER', '1969601374')
 API_SECRET = os.getenv('IMAGE_DETECTION_API_SECRET', 'uk7Rwq4Bh8kURjU3WauN3J7nhtGgjSQz')
 detector = ImageDetector(API_USER, API_SECRET)
 
+@app.route('/', methods=['GET'])
+def root():
+    """Root endpoint"""
+    return jsonify({
+        'status': 'ok',
+        'service': 'image-detection-backend',
+        'version': '1.0.0',
+        'endpoints': {
+            'health': '/health',
+            'detect': '/detect'
+        }
+    }), 200
+
 @app.route('/health', methods=['GET'])
 def health():
     """Health check endpoint"""
