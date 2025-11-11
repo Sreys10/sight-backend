@@ -9,7 +9,8 @@ import tempfile
 from image_detector import ImageDetector
 
 app = Flask(__name__)
-CORS(app)  # Enable CORS for frontend
+# Enable CORS for all origins (frontend can be on any domain)
+CORS(app, resources={r"/*": {"origins": "*"}})
 
 # Initialize detector with environment variables
 API_USER = os.getenv('IMAGE_DETECTION_API_USER', '1969601374')
