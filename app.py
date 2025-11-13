@@ -1,104 +1,203 @@
-"""
-Flask API service for image detection
-Deploy this on Railway separately from the frontend
-"""
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import os
 import tempfile
-from image_detector import ImageDetector
+import base64
+from io import BytesIO
+from PIL import Image
+import cv2
+import numpy as np
 
 app = Flask(__name__)
-# Enable CORS for all origins (frontend can be on any domain)
-CORS(app, resources={r"/*": {"origins": "*"}})
+CORS(app)
 
-# Initialize detector with environment variables
-API_USER = os.getenv('IMAGE_DETECTION_API_USER', '1969601374')
-API_SECRET = os.getenv('IMAGE_DETECTION_API_SECRET', 'uk7Rwq4Bh8kURjU3WauN3J7nhtGgjSQz')
-detector = ImageDetector(API_USER, API_SECRET)
+# Import face matcher if available
+try:
+    from face_matcher import FaceMatcher
+    face_matcher = FaceMatcher()
+    FACE_MATCHING_AVAILABLE = True
+except ImportError:
+    print("Warning: Face matching not available. Install deepface dependencies.")
+    FACE_MATCHING_AVAILABLE = False
 
-@app.route('/', methods=['GET'])
-def root():
-    """Root endpoint"""
-    return jsonify({
-        'status': 'ok',
-        'service': 'image-detection-backend',
-        'version': '1.0.0',
-        'endpoints': {
-            'health': '/health',
-            'detect': '/detect'
-        }
-    }), 200
+# Import image detector
+try:
+    from image_detector import detect_tampering
+    TAMPERING_DETECTION_AVAILABLE = True
+except ImportError:
+    print("Warning: Image tampering detection not available.")
+    TAMPERING_DETECTION_AVAILABLE = False
+
 
 @app.route('/health', methods=['GET'])
 def health():
     """Health check endpoint"""
     return jsonify({
-        'status': 'ok',
-        'service': 'image-detection-backend',
-        'version': '1.0.0'
+        'status': 'healthy',
+        'face_matching': FACE_MATCHING_AVAILABLE,
+        'tampering_detection': TAMPERING_DETECTION_AVAILABLE
     }), 200
 
+
 @app.route('/detect', methods=['POST'])
-def detect():
-    """
-    Image detection endpoint
-    Accepts multipart/form-data with 'image' field
-    """
+def detect_tampering_endpoint():
+    """Detect image tampering"""
+    if not TAMPERING_DETECTION_AVAILABLE:
+        return jsonify({'error': 'Tampering detection not available'}), 503
+    
     try:
         if 'image' not in request.files:
-            return jsonify({
-                'status': 'error',
-                'error': 'No image file provided'
-            }), 400
+            return jsonify({'error': 'No image file provided'}), 400
         
         file = request.files['image']
-        
         if file.filename == '':
-            return jsonify({
-                'status': 'error',
-                'error': 'No file selected'
-            }), 400
+            return jsonify({'error': 'No file selected'}), 400
         
-        # Validate file type
-        if not file.content_type or not file.content_type.startswith('image/'):
-            return jsonify({
-                'status': 'error',
-                'error': 'File must be an image'
-            }), 400
-        
-        # Save temporary file
+        # Save uploaded file temporarily
         with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as tmp_file:
             file.save(tmp_file.name)
-            temp_path = tmp_file.name
+            tmp_path = tmp_file.name
         
         try:
-            # Analyze image
-            results = detector.analyze_image(temp_path)
-            
-            # Return results
-            return jsonify(results), 200
-        except Exception as e:
-            return jsonify({
-                'status': 'error',
-                'error': str(e),
-                'message': 'Failed to analyze image'
-            }), 500
+            # Detect tampering
+            result = detect_tampering(tmp_path)
+            return jsonify(result), 200
         finally:
             # Clean up temp file
             try:
-                os.unlink(temp_path)
+                os.unlink(tmp_path)
             except:
                 pass
-            
     except Exception as e:
-        return jsonify({
-            'status': 'error',
-            'error': str(e),
-            'message': 'Internal server error'
-        }), 500
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/face/detect', methods=['POST'])
+def detect_faces():
+    """Detect faces in an image"""
+    if not FACE_MATCHING_AVAILABLE:
+        return jsonify({'error': 'Face detection not available'}), 503
+    
+    try:
+        if 'image' not in request.files:
+            return jsonify({'error': 'No image file provided'}), 400
+        
+        file = request.files['image']
+        if file.filename == '':
+            return jsonify({'error': 'No file selected'}), 400
+        
+        # Get optional parameters
+        detector = request.form.get('detector', 'retinaface')
+        
+        # Save uploaded file temporarily
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as tmp_file:
+            file.save(tmp_file.name)
+            tmp_path = tmp_file.name
+        
+        try:
+            # Detect faces
+            result = face_matcher.detect_faces(tmp_path, detector_backend=detector)
+            return jsonify(result), 200
+        finally:
+            # Clean up temp file
+            try:
+                os.unlink(tmp_path)
+            except:
+                pass
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/face/search', methods=['POST'])
+def search_faces():
+    """Search for faces in database"""
+    if not FACE_MATCHING_AVAILABLE:
+        return jsonify({'error': 'Face matching not available'}), 503
+    
+    try:
+        if 'image' not in request.files:
+            return jsonify({'error': 'No image file provided'}), 400
+        
+        file = request.files['image']
+        if file.filename == '':
+            return jsonify({'error': 'No file selected'}), 400
+        
+        # Get optional parameters
+        detector = request.form.get('detector', 'retinaface')
+        model = request.form.get('model', 'ArcFace')
+        threshold = float(request.form.get('threshold', '0.5'))
+        database_path = request.form.get('database_path', 'database/')
+        
+        # Save uploaded file temporarily
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as tmp_file:
+            file.save(tmp_file.name)
+            tmp_path = tmp_file.name
+        
+        try:
+            # Search for faces
+            result = face_matcher.search_faces(
+                tmp_path,
+                database_path=database_path,
+                model_name=model,
+                detector_backend=detector,
+                threshold=threshold
+            )
+            return jsonify(result), 200
+        finally:
+            # Clean up temp file
+            try:
+                os.unlink(tmp_path)
+            except:
+                pass
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/face/detect-and-search', methods=['POST'])
+def detect_and_search_faces():
+    """Detect faces in image and search against database"""
+    if not FACE_MATCHING_AVAILABLE:
+        return jsonify({'error': 'Face matching not available'}), 503
+    
+    try:
+        if 'image' not in request.files:
+            return jsonify({'error': 'No image file provided'}), 400
+        
+        file = request.files['image']
+        if file.filename == '':
+            return jsonify({'error': 'No file selected'}), 400
+        
+        # Get optional parameters
+        detector = request.form.get('detector', 'retinaface')
+        model = request.form.get('model', 'ArcFace')
+        threshold = float(request.form.get('threshold', '0.5'))
+        database_path = request.form.get('database_path', 'database/')
+        
+        # Save uploaded file temporarily
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as tmp_file:
+            file.save(tmp_file.name)
+            tmp_path = tmp_file.name
+        
+        try:
+            # Detect and search faces
+            result = face_matcher.detect_and_search(
+                tmp_path,
+                database_path=database_path,
+                model_name=model,
+                detector_backend=detector,
+                threshold=threshold
+            )
+            return jsonify(result), 200
+        finally:
+            # Clean up temp file
+            try:
+                os.unlink(tmp_path)
+            except:
+                pass
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
 
 if __name__ == '__main__':
-    port = int(os.getenv('PORT', 5000))
+    port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=False)
-

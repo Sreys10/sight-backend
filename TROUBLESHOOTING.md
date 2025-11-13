@@ -186,3 +186,7 @@ BACKEND_SERVICE_URL=https://your-service.railway.app
    - Railway: Check their status page
    - Vercel: Check their status page
 
+
+
+
+
