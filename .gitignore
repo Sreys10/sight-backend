@@ -15,3 +15,14 @@ ENV/
 .railway/
 railpack-plan.json
 
+# Database images and indexes
+database/*.jpg
+database/*.jpeg
+database/*.png
+database/*.gif
+database/*.bmp
+database/*.pkl
+faiss_index.bin
+faiss_metadata.json
+database_metadata.json
+

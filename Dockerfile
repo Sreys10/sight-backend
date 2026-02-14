@@ -23,6 +23,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY app.py .
 COPY image_detector.py .
 COPY face_matcher.py .
+COPY index_database.py .
 
 # Copy database folder for face matching
 COPY database/ ./database/

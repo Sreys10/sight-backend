@@ -1,0 +1,36 @@
+{
+  "ela": {
+    "elaImage": "[TRIMMED]",
+    "interpretation": "Uniform compression pattern \u2014 low suspicion of tampering",
+    "meanIntensity": 0.0,
+    "performed": true
+  },
+  "hasMetadata": false,
+  "maxScore": 24,
+  "metadata": {},
+  "metadataFlags": [
+    {
+      "points": 3,
+      "severity": "high",
+      "text": "No metadata found \u2014 may have been stripped"
+    }
+  ],
+  "metadataSource": "PIL",
+  "prnu": {
+    "interpretation": "Uniform noise pattern \u2014 consistent with an untampered image",
+    "meanVariance": 0.0,
+    "noiseMap": "[TRIMMED]",
+    "performed": true,
+    "suspiciousBlocks": 0,
+    "suspiciousRatio": 0.0,
+    "totalBlocks": 24,
+    "uniformityScore": 0.0
+  },
+  "reasons": [
+    "ELA: Uniform pattern (mean=0.0)",
+    "PRNU: Uniform pattern (CV=0.00)"
+  ],
+  "risk": "LOW",
+  "score": 3,
+  "verdict": "Likely Original"
+}
