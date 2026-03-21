@@ -7,6 +7,7 @@ from io import BytesIO
 from PIL import Image
 import cv2
 import numpy as np
+from functools import wraps
 
 # Load environment variables from .env file if it exists
 try:
@@ -17,6 +18,18 @@ except ImportError:
 
 app = Flask(__name__)
 CORS(app)
+
+# Security: Require API key from callers
+API_KEY = os.getenv('EVI_CHECK_API_KEY', 'default-api-key-replace-me')
+
+def require_api_key(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        key = request.headers.get('X-API-Key')
+        if key and key == API_KEY:
+            return f(*args, **kwargs)
+        return jsonify({'error': 'Unauthorized: Invalid or missing API Key'}), 401
+    return decorated
 
 # Import face matcher if available
 try:
@@ -53,6 +66,7 @@ def health():
 
 
 @app.route('/detect', methods=['POST'])
+@require_api_key
 def detect_tampering_endpoint():
     """Detect image tampering"""
     if not TAMPERING_DETECTION_AVAILABLE:
@@ -86,6 +100,7 @@ def detect_tampering_endpoint():
 
 
 @app.route('/face/detect', methods=['POST'])
+@require_api_key
 def detect_faces():
     """Detect faces in an image"""
     if not FACE_MATCHING_AVAILABLE:
@@ -122,6 +137,7 @@ def detect_faces():
 
 
 @app.route('/face/search', methods=['POST'])
+@require_api_key
 def search_faces():
     """Search for faces in database"""
     if not FACE_MATCHING_AVAILABLE:
@@ -171,6 +187,7 @@ def search_faces():
 
 
 @app.route('/face/detect-and-search', methods=['POST'])
+@require_api_key
 def detect_and_search_faces():
     """Detect faces in image and search against database"""
     if not FACE_MATCHING_AVAILABLE:
@@ -218,6 +235,7 @@ def detect_and_search_faces():
 
 
 @app.route('/face/index-database', methods=['POST'])
+@require_api_key
 def index_database():
     """Index all images in the database folder to FAISS"""
     if not FACE_MATCHING_AVAILABLE:
@@ -266,6 +284,7 @@ except ImportError:
 
 
 @app.route('/face/database/list', methods=['GET'])
+@require_api_key
 def list_database():
     """List all persons in the database"""
     if not DATABASE_MANAGER_AVAILABLE:
@@ -282,6 +301,7 @@ def list_database():
 
 
 @app.route('/face/database/add', methods=['POST'])
+@require_api_key
 def add_to_database():
     """Add a person to the database"""
     if not DATABASE_MANAGER_AVAILABLE:
@@ -385,6 +405,7 @@ def add_to_database():
 
 
 @app.route('/face/database/update/<person_id>', methods=['PUT'])
+@require_api_key
 def update_person(person_id):
     """Update person metadata"""
     if not DATABASE_MANAGER_AVAILABLE:
@@ -408,6 +429,7 @@ def update_person(person_id):
 
 
 @app.route('/face/database/delete/<person_id>', methods=['DELETE'])
+@require_api_key
 def delete_person(person_id):
     """Delete a person from the database"""
     if not DATABASE_MANAGER_AVAILABLE:
