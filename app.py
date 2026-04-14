@@ -3,6 +3,8 @@ from flask_cors import CORS
 import os
 import tempfile
 import base64
+import subprocess
+import json
 from io import BytesIO
 from PIL import Image
 import cv2
