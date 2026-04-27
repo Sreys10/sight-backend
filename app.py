@@ -264,21 +264,20 @@ def index_database():
 # Database management endpoints
 try:
     from database_manager import DatabaseManager
-    mongodb_uri = os.getenv('MONGODB_URI', 'mongodb://localhost:27017/')
-    
-    # Check if MongoDB URI is set
-    if not mongodb_uri or mongodb_uri == 'mongodb://localhost:27017/':
-        print("⚠️  Warning: Using default MongoDB URI. Set MONGODB_URI environment variable for MongoDB Atlas.")
-        print("   For MongoDB Atlas setup, see MONGODB_ATLAS_SETUP.md")
-    
-    db_manager = DatabaseManager(mongodb_uri=mongodb_uri)
-    DATABASE_MANAGER_AVAILABLE = True
-    
-    # Check if connection was successful
-    if db_manager.collection is None:
-        print("⚠️  Warning: Database manager initialized but MongoDB connection failed.")
-        print("   Face database features will not be available.")
-        print("   Please check your MONGODB_URI and MongoDB connection.")
+    database_url = os.getenv('DATABASE_URL')
+
+    if not database_url:
+        print("⚠️  Warning: DATABASE_URL not set. Face database features will not be available.")
+        DATABASE_MANAGER_AVAILABLE = False
+        db_manager = None
+    else:
+        db_manager = DatabaseManager(database_url=database_url)
+        DATABASE_MANAGER_AVAILABLE = True
+
+        if db_manager.cursor is None:
+            print("⚠️  Warning: Database manager initialized but PostgreSQL connection failed.")
+            print("   Face database features will not be available.")
+            DATABASE_MANAGER_AVAILABLE = False
 except ImportError:
     print("Warning: Database manager not available.")
     DATABASE_MANAGER_AVAILABLE = False
