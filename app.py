@@ -38,8 +38,12 @@ try:
     from face_matcher import FaceMatcher
     face_matcher = FaceMatcher()
     FACE_MATCHING_AVAILABLE = True
-except ImportError:
-    print("Warning: Face matching not available. Install deepface dependencies.")
+except Exception as e:
+    import traceback
+    with open('face_matcher_error.log', 'w') as f:
+        f.write(f"Exception raised during FaceMatcher load: {str(e)}\n")
+        traceback.print_exc(file=f)
+    print(f"Warning: Face matching not available. Error: {str(e)}")
     FACE_MATCHING_AVAILABLE = False
 
 # Import image detector
@@ -261,38 +265,47 @@ def index_database():
         return jsonify({'error': str(e)}), 500
 
 
-# Database management endpoints
-try:
-    from database_manager import DatabaseManager
-    database_url = os.getenv('DATABASE_URL')
+db_manager = None
+DATABASE_MANAGER_AVAILABLE = False
 
-    if not database_url:
-        print("⚠️  Warning: DATABASE_URL not set. Face database features will not be available.")
-        DATABASE_MANAGER_AVAILABLE = False
-        db_manager = None
-    else:
-        db_manager = DatabaseManager(database_url=database_url)
-        DATABASE_MANAGER_AVAILABLE = True
-
+def get_database_manager():
+    global db_manager, DATABASE_MANAGER_AVAILABLE
+    try:
+        from database_manager import DatabaseManager
+        database_url = os.getenv('DATABASE_URL')
+        if not database_url:
+            return None, "DATABASE_URL environment variable is not set."
+        
+        if db_manager is None:
+            db_manager = DatabaseManager(database_url=database_url)
+            
         if db_manager.cursor is None:
-            print("⚠️  Warning: Database manager initialized but PostgreSQL connection failed.")
-            print("   Face database features will not be available.")
-            DATABASE_MANAGER_AVAILABLE = False
-except ImportError:
-    print("Warning: Database manager not available.")
-    DATABASE_MANAGER_AVAILABLE = False
-    db_manager = None
+            # Connection might have dropped, try to re-initialize
+            db_manager = DatabaseManager(database_url=database_url)
+            
+        if db_manager.cursor is None:
+            return None, "PostgreSQL connection failed (cursor is None). Please check database status and connection string."
+            
+        DATABASE_MANAGER_AVAILABLE = True
+        return db_manager, None
+    except ImportError as e:
+        import traceback
+        return None, f"ImportError: Failed to import database_manager dependency. Check that psycopg2-binary is installed. Detail: {str(e)}\n{traceback.format_exc()}"
+    except Exception as e:
+        import traceback
+        return None, f"Initialization failed: {str(e)}\n{traceback.format_exc()}"
 
 
 @app.route('/face/database/list', methods=['GET'])
 @require_api_key
 def list_database():
     """List all persons in the database"""
-    if not DATABASE_MANAGER_AVAILABLE:
-        return jsonify({'error': 'Database manager not available'}), 503
+    manager, err = get_database_manager()
+    if err:
+        return jsonify({'error': f'Database manager not available: {err}'}), 503
     
     try:
-        persons = db_manager.get_all_persons()
+        persons = manager.get_all_persons()
         return jsonify({
             'success': True,
             'persons': persons
@@ -305,8 +318,9 @@ def list_database():
 @require_api_key
 def add_to_database():
     """Add a person to the database"""
-    if not DATABASE_MANAGER_AVAILABLE:
-        return jsonify({'error': 'Database manager not available'}), 503
+    manager, err = get_database_manager()
+    if err:
+        return jsonify({'error': f'Database manager not available: {err}'}), 503
     
     try:
         # Debug: Print what Flask received
@@ -333,7 +347,7 @@ def add_to_database():
         
         print(f"Adding person: {person_name}, File: {file.filename}, Size: {file.content_length if hasattr(file, 'content_length') else 'unknown'}")
         
-        result = db_manager.add_person(
+        result = manager.add_person(
             image_file=file,
             person_name=person_name,
             name=request.form.get('name', ''),
@@ -361,7 +375,7 @@ def add_to_database():
                             image_ext = os.path.splitext(file.filename)[1] or '.jpg'
                         else:
                             image_ext = '.jpg'
-                    local_path = os.path.join(db_manager.database_path, f"{person_name}{image_ext}")
+                    local_path = os.path.join(manager.database_path, f"{person_name}{image_ext}")
                     
                     # Prepare additional metadata
                     additional_metadata = {
@@ -409,12 +423,13 @@ def add_to_database():
 @require_api_key
 def update_person(person_id):
     """Update person metadata"""
-    if not DATABASE_MANAGER_AVAILABLE:
-        return jsonify({'error': 'Database manager not available'}), 503
+    manager, err = get_database_manager()
+    if err:
+        return jsonify({'error': f'Database manager not available: {err}'}), 503
     
     try:
         data = request.json
-        result = db_manager.update_person(
+        result = manager.update_person(
             person_id=person_id,
             person_name=data.get('person_name', ''),
             name=data.get('name', ''),
@@ -433,15 +448,16 @@ def update_person(person_id):
 @require_api_key
 def delete_person(person_id):
     """Delete a person from the database"""
-    if not DATABASE_MANAGER_AVAILABLE:
-        return jsonify({'error': 'Database manager not available'}), 503
+    manager, err = get_database_manager()
+    if err:
+        return jsonify({'error': f'Database manager not available: {err}'}), 503
     
     try:
         # Get person_name before deletion (needed for FAISS index removal)
         person_name = None
         if FACE_MATCHING_AVAILABLE:
             try:
-                person = db_manager.get_person(person_id)
+                person = manager.get_person(person_id)
                 if person:
                     person_name = person.get('person_name')
             except:
@@ -460,7 +476,7 @@ def delete_person(person_id):
             else:
                 person_name = person_id
         
-        result = db_manager.delete_person(person_id)
+        result = manager.delete_person(person_id)
         
         if result['success']:
             # Remove from FAISS index (incremental removal)
@@ -858,6 +874,7 @@ class HybridForensicAnalyzer:
 
 
 @app.route('/metadata/analyze', methods=['POST'])
+@require_api_key
 def analyze_metadata():
     """Hybrid forensic analysis: metadata + ELA"""
     try:

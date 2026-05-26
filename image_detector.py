@@ -213,6 +213,11 @@ def detect_tampering(image_path):
     API_USER = os.getenv('IMAGE_DETECTION_API_USER', '1969601374')
     API_SECRET = os.getenv('IMAGE_DETECTION_API_SECRET', 'uk7Rwq4Bh8kURjU3WauN3J7nhtGgjSQz')
 
+def detect_tampering(image_path):
+    # API credentials
+    API_USER = os.getenv('IMAGE_DETECTION_API_USER', '1969601374')
+    API_SECRET = os.getenv('IMAGE_DETECTION_API_SECRET', 'uk7Rwq4Bh8kURjU3WauN3J7nhtGgjSQz')
+
     # Initialize detector
     detector = ImageDetector(API_USER, API_SECRET)
     return detector.analyze_image(image_path)
