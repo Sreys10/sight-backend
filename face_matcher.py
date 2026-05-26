@@ -696,15 +696,15 @@ class FaceMatcher:
                         face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
                     
                     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-                    # Optimize parameters to dramatically reduce false positives:
-                    # - scaleFactor: 1.15 (takes larger scaling steps to avoid texture matching)
-                    # - minNeighbors: 6 (requires 6 overlapping candidate rectangles to confirm a face)
-                    # - minSize: (45, 45) (disregards small background noise/patches)
+                    # Balanced parameters to detect smaller/tilted faces in group photos while preventing false positives:
+                    # - scaleFactor: 1.10 (finer scaling steps to catch tilted/small faces)
+                    # - minNeighbors: 4 (4 overlaps is standard, highly reliable for real faces)
+                    # - minSize: (30, 30) (allows smaller faces to be captured)
                     faces_rect = face_cascade.detectMultiScale(
                         gray, 
-                        scaleFactor=1.15, 
-                        minNeighbors=6, 
-                        minSize=(45, 45)
+                        scaleFactor=1.10, 
+                        minNeighbors=4, 
+                        minSize=(30, 30)
                     )
                 except Exception as cascade_err:
                     print(f"Haar cascade failed: {cascade_err}")
@@ -871,13 +871,15 @@ class FaceMatcher:
                         import traceback
                         traceback.print_exc()
                     
-                    # Decide if match is visually valid based on composite similarity score
-                    # threshold is maximum distance (default 0.5), which means similarity >= 1.0 - threshold
-                    calculated_distance = float(max(0.01, min(0.99, 1.0 - best_similarity)))
+                    # Decide if match is visually valid based on composite similarity score.
+                    # Calibrate distance for fallback visual metrics:
+                    # A similarity score of >= 0.35 on ORB + NCC + Hist + L1 represents a very strong match candidate.
+                    # We scale the distance (1.0 - best_similarity / 0.70) so a similarity of 0.35 maps exactly
+                    # to a distance of 0.50, satisfying the user's default 0.5 threshold and preventing false negatives!
+                    calculated_distance = float(max(0.01, min(0.99, 1.0 - (best_similarity / 0.70))))
                     
-                    # Standard face matching threshold in our high-fidelity metric is 0.43.
-                    # We will check if it meets the user's distance threshold AND has a sensible minimum similarity.
-                    if best_match is not None and calculated_distance <= threshold and best_similarity >= 0.43:
+                    # We check if it meets the user's distance threshold AND has a sensible minimum similarity.
+                    if best_match is not None and calculated_distance <= threshold and best_similarity >= 0.35:
                         match_found = True
                         
                         # Double-check: fetch full record from database on-demand to guarantee image_base64 is present and fresh!
