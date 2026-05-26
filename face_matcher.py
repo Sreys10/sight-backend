@@ -13,16 +13,22 @@ from datetime import datetime
 import threading
 import time
 
-# Try loading primary deepface & faiss dependencies
-try:
-    from deepface import DeepFace
-    import faiss
-    DEEPFACE_AVAILABLE = True
-    print("✓ DeepFace and FAISS loaded successfully for face matching")
-except Exception as e:
+# Try loading primary deepface & faiss dependencies unless forced to fallback
+FORCE_FALLBACK = os.getenv('FORCE_FALLBACK', 'false').lower() == 'true'
+
+if FORCE_FALLBACK:
     DEEPFACE_AVAILABLE = False
-    print(f"⚠️  Warning: Primary face matching libraries (DeepFace/FAISS/TensorFlow) failed to load: {e}")
-    print("   Enabling lightweight Forensic Simulation fallback mode using OpenCV and PostgreSQL.")
+    print("ℹ️  Force Fallback mode enabled. Bypassing DeepFace/FAISS/TensorFlow to run in lightweight OpenCV fallback mode.")
+else:
+    try:
+        from deepface import DeepFace
+        import faiss
+        DEEPFACE_AVAILABLE = True
+        print("✓ DeepFace and FAISS loaded successfully for face matching")
+    except Exception as e:
+        DEEPFACE_AVAILABLE = False
+        print(f"⚠️  Warning: Primary face matching libraries (DeepFace/FAISS/TensorFlow) failed to load: {e}")
+        print("   Enabling lightweight Forensic Simulation fallback mode using OpenCV and PostgreSQL.")
 
 
 # ---------------------------------------------------------------------------
