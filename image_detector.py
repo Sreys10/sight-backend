@@ -122,36 +122,68 @@ class ImageDetector:
     
     def analyze_image(self, image_source: Union[str, Path]) -> Dict:
         """
-        Perform comprehensive image analysis
+        Perform comprehensive image analysis using a single combined API call
         
         Args:
             image_source: Image URL or file path
             
         Returns:
-            Dictionary with all detection results
+            Dictionary with all detection results mapped for backward compatibility
         """
         print(f"Analyzing image: {image_source}", file=sys.stderr)
+        
+        # Make a single combined request to Sightengine for all models
+        print("Running combined Sightengine analysis...", file=sys.stderr)
+        combined_response = self._make_request(image_source, "deepfake,genai,quality,scam")
         
         results = {
             'image_source': str(image_source),
             'status': 'success'
         }
         
-        # Run all checks
-        print("Checking for deepfake...", file=sys.stderr)
-        results['deepfake'] = self.check_deepfake(image_source)
-        
-        print("Checking for AI-generated content...", file=sys.stderr)
-        results['ai_generated'] = self.check_ai_generated(image_source)
-        
-        print("Checking image quality...", file=sys.stderr)
-        results['quality'] = self.check_quality(image_source)
-        
-        print("Checking for scammer detection...", file=sys.stderr)
-        results['scammer'] = self.check_scammer(image_source)
-        
+        # Reconstruct individual check responses for perfect backward compatibility
+        if combined_response.get('status') == 'success':
+            # 1. Deepfake
+            results['deepfake'] = {
+                'status': 'success',
+                'type': {
+                    'deepfake': combined_response.get('type', {}).get('deepfake', 0.0)
+                }
+            }
+            # 2. AI-Generated
+            results['ai_generated'] = {
+                'status': 'success',
+                'type': {
+                    'ai_generated': combined_response.get('type', {}).get('ai_generated', 0.0)
+                }
+            }
+            # 3. Quality
+            results['quality'] = {
+                'status': 'success',
+                'quality': {
+                    'score': combined_response.get('quality', {}).get('score', 0.0)
+                },
+                'media': combined_response.get('media', {})
+            }
+            # 4. Scammer (scam model returns 'scam' object in root)
+            results['scammer'] = {
+                'status': 'success',
+                'scam': {
+                    'prob': combined_response.get('scam', {}).get('prob', 0.0)
+                },
+                'faces': combined_response.get('scam', {}).get('faces', [])
+            }
+        else:
+            # Fallback to empty default/error responses
+            err_msg = combined_response.get('error', 'API Request Failed')
+            results['status'] = 'error'
+            results['error'] = err_msg
+            results['deepfake'] = {'status': 'error', 'error': err_msg}
+            results['ai_generated'] = {'status': 'error', 'error': err_msg}
+            results['quality'] = {'status': 'error', 'error': err_msg}
+            results['scammer'] = {'status': 'error', 'error': err_msg}
+            
         print("Analysis complete", file=sys.stderr)
-        
         return results
     
     def generate_report(self, results: Dict) -> str:
