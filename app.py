@@ -299,17 +299,71 @@ def get_database_manager():
 @app.route('/face/database/list', methods=['GET'])
 @require_api_key
 def list_database():
-    """List all persons in the database"""
+    """List all persons in the database.
+    
+    Returns metadata + a compact 80x80 thumbnail instead of full base64 images
+    to minimise bandwidth through the Vercel proxy layer.  The full image_base64
+    is still available via /face/database/person/<id>.
+    """
     manager, err = get_database_manager()
     if err:
         return jsonify({'error': f'Database manager not available: {err}'}), 503
-    
+
+    def _make_thumbnail(b64_str: str, size: int = 80) -> str:
+        """Downscale a base64 image to a tiny thumbnail (size x size JPEG)."""
+        try:
+            raw = b64_str.split(',', 1)[-1]   # strip data-URI header if present
+            img_data = base64.b64decode(raw)
+            nparr = np.frombuffer(img_data, np.uint8)
+            img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+            if img is None:
+                return b64_str
+            h, w = img.shape[:2]
+            scale = size / max(h, w)
+            thumb = cv2.resize(img, (max(1, int(w * scale)), max(1, int(h * scale))),
+                               interpolation=cv2.INTER_AREA)
+            _, buf = cv2.imencode('.jpg', thumb, [cv2.IMWRITE_JPEG_QUALITY, 40])
+            thumb_b64 = base64.b64encode(buf).decode('utf-8')
+            return f'data:image/jpeg;base64,{thumb_b64}'
+        except Exception:
+            return b64_str   # fall back to original on error
+
     try:
         persons = manager.get_all_persons()
+        compact = []
+        for p in persons:
+            entry = {k: v for k, v in p.items() if k != 'image_base64'}
+            # Prefer a Cloudinary URL (no base64 data over the wire at all)
+            if p.get('image_url'):
+                entry['image_thumbnail'] = p['image_url']
+                entry['has_image'] = True
+            elif p.get('image_base64'):
+                entry['image_thumbnail'] = _make_thumbnail(p['image_base64'])
+                entry['has_image'] = True
+            else:
+                entry['image_thumbnail'] = None
+                entry['has_image'] = False
+            compact.append(entry)
         return jsonify({
             'success': True,
-            'persons': persons
+            'persons': compact
         }), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/face/database/person/<person_id>', methods=['GET'])
+@require_api_key
+def get_person_detail(person_id):
+    """Get full person record including image_base64 for a single person."""
+    manager, err = get_database_manager()
+    if err:
+        return jsonify({'error': f'Database manager not available: {err}'}), 503
+    try:
+        person = manager.get_person(person_id)
+        if not person:
+            return jsonify({'error': 'Person not found'}), 404
+        return jsonify({'success': True, 'person': person}), 200
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -356,7 +410,8 @@ def add_to_database():
             phone=request.form.get('phone', ''),
             notes=request.form.get('notes', ''),
             added_by_name=request.form.get('added_by_name', ''),
-            added_by_email=request.form.get('added_by_email', '')
+            added_by_email=request.form.get('added_by_email', ''),
+            image_url=request.form.get('image_url', None) or None   # Cloudinary URL (optional)
         )
         
         print(f"Add person result: {result}")
@@ -496,6 +551,134 @@ def delete_person(person_id):
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+# ==================== CLOUD WEAPON DETECTION ====================
+
+@app.route('/weapon/detect', methods=['POST'])
+def weapon_detect():
+    """Detect weapons in an uploaded image using Cloud Verification REST API."""
+    import requests
+    try:
+        if 'image' not in request.files:
+            return jsonify({'error': 'No image file provided'}), 400
+
+        file = request.files['image']
+        if not file.filename:
+            return jsonify({'error': 'No file selected'}), 400
+
+        # Retrieve credentials from environment
+        api_user = os.getenv('IMAGE_DETECTION_API_USER')
+        api_secret = os.getenv('IMAGE_DETECTION_API_SECRET')
+
+        if not api_user or not api_secret:
+            return jsonify({
+                'success': False,
+                'error': 'Verification API credentials (IMAGE_DETECTION_API_USER / IMAGE_DETECTION_API_SECRET) are not configured in backend-service/.env'
+            }), 500
+
+        # Read file stream
+        file.seek(0)
+        image_data = file.read()
+
+        # Prepare multipart payloads
+        files = {'media': ('image.jpg', image_data, file.content_type or 'image/jpeg')}
+        data = {
+            'models': 'weapon',
+            'api_user': api_user,
+            'api_secret': api_secret
+        }
+
+        # Query verification check API
+        response = requests.post('https://api.sightengine.com/1.0/check.json', files=files, data=data)
+
+        if response.status_code != 200:
+            return jsonify({
+                'success': False,
+                'error': f"Verification API returned status code {response.status_code}: {response.text}"
+            }), 400
+
+        res_data = response.json()
+        if res_data.get('status') != 'success':
+            error_msg = res_data.get('error', {}).get('message', 'Verification request failed')
+            return jsonify({
+                'success': False,
+                'error': f"Verification API Error: {error_msg}"
+            }), 400
+
+        # Extract classification scores
+        weapon_info = res_data.get('weapon', {})
+        classes = weapon_info.get('classes', {})
+
+        detections = []
+        classes_found = set()
+        anomalies = []
+
+        # Mapping weapon categories to frontend styles
+        class_mapping = {
+            'firearm': 'Pistol',
+            'knife': 'Knife',
+            'firearm_gesture': 'Unknown',
+            'firearm_toy': 'Unknown'
+        }
+
+        # Detection threshold set at 20%
+        DETECTION_THRESHOLD = 0.2
+
+        for se_class, score in classes.items():
+            if score >= DETECTION_THRESHOLD:
+                frontend_class = class_mapping.get(se_class, 'Unknown')
+                conf_percent = round(score * 100, 2)
+
+                # Return placeholder coordinates to satisfy UI and report rendering
+                detections.append({
+                    'class': frontend_class,
+                    'confidence': conf_percent,
+                    'bbox': {
+                        'x': 50.0,
+                        'y': 50.0,
+                        'width': 100.0,
+                        'height': 100.0
+                    }
+                })
+
+                if frontend_class != 'Unknown':
+                    classes_found.add(frontend_class)
+                else:
+                    readable_name = se_class.replace('_', ' ').title()
+                    classes_found.add(readable_name)
+
+                if score >= 0.8:
+                    anomalies.append(f"{frontend_class} ({se_class}) detected with {conf_percent:.1f}% confidence — high certainty threat")
+                else:
+                    anomalies.append(f"{frontend_class} ({se_class}) detected with {conf_percent:.1f}% confidence")
+
+        # Tag true weapon threats (firearms or knives)
+        weapons_found = any(classes.get(w, 0.0) >= DETECTION_THRESHOLD for w in ['firearm', 'knife'])
+
+        raw_result = {
+            'model': 'Cloud Verification API (weapon)',
+            'total_detections': len(detections),
+            'classes': list(classes_found),
+            'confidence_threshold': DETECTION_THRESHOLD,
+            'raw_api_response': res_data
+        }
+
+        return jsonify({
+            'success': True,
+            'weaponsFound': weapons_found,
+            'weaponsDetected': list(classes_found),
+            'detections': detections,
+            'anomalies': anomalies,
+            'totalDetections': len(detections),
+            'rawResult': raw_result,
+        }), 200
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+
 # ==================== HYBRID FORENSIC ANALYSIS (METADATA + ELA) ====================
 
 from PIL import ImageChops, ImageEnhance
@@ -563,8 +746,7 @@ class HybridForensicAnalyzer:
 
         # Check 1: Camera info
         if "Make" not in metadata and "Camera Make" not in metadata:
-            self.score += 3
-            flags.append({"text": "Camera information missing", "severity": "high", "points": 3})
+            flags.append({"text": "Camera information missing", "severity": "info", "points": 0})
 
         # Check 2: Editing software
         software = metadata.get("Software", metadata.get("Creator Tool", ""))
@@ -579,14 +761,12 @@ class HybridForensicAnalyzer:
         # Check 3: Missing original date
         has_date = any(k in metadata for k in ["DateTimeOriginal", "Date/Time Original", "CreateDate", "Create Date"])
         if not has_date:
-            self.score += 2
-            flags.append({"text": "Missing original capture date", "severity": "medium", "points": 2})
+            flags.append({"text": "Missing original capture date", "severity": "info", "points": 0})
 
         # Check 4: Resolution anomaly
         x_res = metadata.get("XResolution", metadata.get("X Resolution", None))
         if x_res is not None and str(x_res).strip() in ["1", "1.0"]:
-            self.score += 1
-            flags.append({"text": "Resolution = 1 (export/web artifact)", "severity": "low", "points": 1})
+            flags.append({"text": "Resolution = 1 (export/web artifact)", "severity": "info", "points": 0})
 
         # Check 5: GPS data present
         gps_keys = [k for k in metadata if 'GPS' in str(k).upper()]
@@ -600,8 +780,7 @@ class HybridForensicAnalyzer:
             try:
                 size_val = float(str(file_size).split()[0])
                 if size_val < 50:
-                    self.score += 1
-                    flags.append({"text": f"Unusually small file size: {file_size}", "severity": "low", "points": 1})
+                    flags.append({"text": f"Unusually small file size: {file_size}", "severity": "info", "points": 0})
             except:
                 pass
 
@@ -632,19 +811,19 @@ class HybridForensicAnalyzer:
             if max_diff == 0:
                 max_diff = 1
 
+            # Compute mean intensity of unscaled differences
+            ela_np_unscaled = np.array(ela_image)
+            mean_intensity = float(np.mean(ela_np_unscaled))
+
             scale = 255.0 / max_diff
             ela_image = ImageEnhance.Brightness(ela_image).enhance(scale)
 
-            # Compute mean intensity
-            ela_np = np.array(ela_image)
-            mean_intensity = float(np.mean(ela_np))
-
-            # Score based on ELA
-            if mean_intensity > 40:
+            # Score based on ELA (unscaled mean intensity)
+            if mean_intensity > 12.0:
                 self.score += 5
                 interpretation = "High compression inconsistency — strong indicator of tampering"
                 self.reasons.append(f"ELA: High inconsistency (mean={mean_intensity:.1f}) (+5)")
-            elif mean_intensity > 25:
+            elif mean_intensity > 6.0:
                 self.score += 3
                 interpretation = "Moderate compression inconsistency — possible editing detected"
                 self.reasons.append(f"ELA: Moderate inconsistency (mean={mean_intensity:.1f}) (+3)")
@@ -760,7 +939,9 @@ class HybridForensicAnalyzer:
             total_blocks = block_h * block_w
 
             # Flag blocks with variance significantly different from mean
-            threshold = mean_var + 2.0 * std_var
+            # Add standard deviation floor (20% of mean variance) to avoid false positives in uniform images
+            min_increment = 0.2 * mean_var if mean_var > 0 else 0.1
+            threshold = mean_var + max(2.0 * std_var, min_increment)
             suspicious_mask = block_variances > threshold
             suspicious_count = int(np.sum(suspicious_mask))
             suspicious_ratio = suspicious_count / total_blocks if total_blocks > 0 else 0
@@ -835,8 +1016,7 @@ class HybridForensicAnalyzer:
         if has_metadata:
             metadata_flags = self.analyze_metadata(metadata)
         else:
-            self.score += 3
-            metadata_flags = [{"text": "No metadata found — may have been stripped", "severity": "high", "points": 3}]
+            metadata_flags = [{"text": "No metadata found — may have been stripped", "severity": "info", "points": 0}]
 
         # ELA analysis
         ela_result = self.perform_ela()

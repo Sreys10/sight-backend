@@ -24,6 +24,10 @@ COPY app.py .
 COPY image_detector.py .
 COPY face_matcher.py .
 COPY index_database.py .
+COPY database_manager.py .
+COPY forensic_analyzer.py .
+COPY weapon_runner.py .
+COPY start.py .
 
 # Copy database folder for face matching
 COPY database/ ./database/

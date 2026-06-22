@@ -35,6 +35,7 @@ class DatabaseManager:
                     id          TEXT PRIMARY KEY,
                     person_name TEXT NOT NULL,
                     image_base64 TEXT,
+                    image_url   TEXT,
                     image_extension TEXT DEFAULT '.jpg',
                     name        TEXT,
                     age         INTEGER,
@@ -46,6 +47,13 @@ class DatabaseManager:
                     created_at  TIMESTAMPTZ DEFAULT NOW()
                 )
             """)
+            # Add image_url column if table already existed without it
+            try:
+                self.cursor.execute("""
+                    ALTER TABLE face_database ADD COLUMN IF NOT EXISTS image_url TEXT;
+                """)
+            except Exception:
+                pass  # column already exists or not supported
             print(f"✓ Successfully connected to PostgreSQL face database")
 
         except Exception as e:
@@ -97,7 +105,8 @@ class DatabaseManager:
 
     def add_person(self, image_file, person_name: str, name: str = "", age: int = None,
                    email: str = "", phone: str = "", notes: str = "",
-                   added_by_name: str = "", added_by_email: str = "") -> Dict:
+                   added_by_name: str = "", added_by_email: str = "",
+                   image_url: str = None) -> Dict:
         """Add a person to the database (stored in PostgreSQL)"""
         if self.cursor is None:
             return {'success': False, 'error': 'PostgreSQL not available'}
@@ -122,10 +131,10 @@ class DatabaseManager:
 
             self.cursor.execute("""
                 INSERT INTO face_database
-                    (id, person_name, image_base64, image_extension, name, age, email, phone, notes, added_by, added_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    (id, person_name, image_base64, image_url, image_extension, name, age, email, phone, notes, added_by, added_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """, (
-                person_id, person_name, image_base64, ext, name,
+                person_id, person_name, image_base64, image_url, ext, name,
                 int(age) if age else None, email, phone, notes,
                 added_by, added_at
             ))

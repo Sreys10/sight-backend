@@ -68,8 +68,7 @@ class HybridForensicAnalyzer:
 
         # Check 1: Camera info
         if "Make" not in metadata and "Camera Make" not in metadata:
-            self.score += 3
-            flags.append({"text": "Camera information missing", "severity": "high", "points": 3})
+            flags.append({"text": "Camera information missing", "severity": "info", "points": 0})
 
         # Check 2: Editing software
         software = metadata.get("Software", metadata.get("Creator Tool", ""))
@@ -84,14 +83,12 @@ class HybridForensicAnalyzer:
         # Check 3: Missing original date
         has_date = any(k in metadata for k in ["DateTimeOriginal", "Date/Time Original", "CreateDate", "Create Date"])
         if not has_date:
-            self.score += 2
-            flags.append({"text": "Missing original capture date", "severity": "medium", "points": 2})
+            flags.append({"text": "Missing original capture date", "severity": "info", "points": 0})
 
         # Check 4: Resolution anomaly
         x_res = metadata.get("XResolution", metadata.get("X Resolution", None))
         if x_res is not None and str(x_res).strip() in ["1", "1.0"]:
-            self.score += 1
-            flags.append({"text": "Resolution = 1 (export/web artifact)", "severity": "low", "points": 1})
+            flags.append({"text": "Resolution = 1 (export/web artifact)", "severity": "info", "points": 0})
 
         # Check 5: GPS data present
         gps_keys = [k for k in metadata if 'GPS' in str(k).upper()]
@@ -105,8 +102,7 @@ class HybridForensicAnalyzer:
             try:
                 size_val = float(str(file_size).split()[0])
                 if size_val < 50:
-                    self.score += 1
-                    flags.append({"text": f"Unusually small file size: {file_size}", "severity": "low", "points": 1})
+                    flags.append({"text": f"Unusually small file size: {file_size}", "severity": "info", "points": 0})
             except:
                 pass
 
@@ -137,19 +133,19 @@ class HybridForensicAnalyzer:
             if max_diff == 0:
                 max_diff = 1
 
+            # Compute mean intensity of unscaled differences
+            ela_np_unscaled = np.array(ela_image)
+            mean_intensity = float(np.mean(ela_np_unscaled))
+
             scale = 255.0 / max_diff
             ela_image = ImageEnhance.Brightness(ela_image).enhance(scale)
 
-            # Compute mean intensity
-            ela_np = np.array(ela_image)
-            mean_intensity = float(np.mean(ela_np))
-
-            # Score based on ELA
-            if mean_intensity > 40:
+            # Score based on ELA (unscaled mean intensity)
+            if mean_intensity > 12.0:
                 self.score += 5
                 interpretation = "High compression inconsistency — strong indicator of tampering"
                 self.reasons.append(f"ELA: High inconsistency (mean={mean_intensity:.1f}) (+5)")
-            elif mean_intensity > 25:
+            elif mean_intensity > 6.0:
                 self.score += 3
                 interpretation = "Moderate compression inconsistency — possible editing detected"
                 self.reasons.append(f"ELA: Moderate inconsistency (mean={mean_intensity:.1f}) (+3)")
@@ -265,7 +261,9 @@ class HybridForensicAnalyzer:
             total_blocks = block_h * block_w
 
             # Flag blocks with variance significantly different from mean
-            threshold = mean_var + 2.0 * std_var
+            # Add standard deviation floor (20% of mean variance) to avoid false positives in uniform images
+            min_increment = 0.2 * mean_var if mean_var > 0 else 0.1
+            threshold = mean_var + max(2.0 * std_var, min_increment)
             suspicious_mask = block_variances > threshold
             suspicious_count = int(np.sum(suspicious_mask))
             suspicious_ratio = suspicious_count / total_blocks if total_blocks > 0 else 0
@@ -340,8 +338,7 @@ class HybridForensicAnalyzer:
         if has_metadata:
             metadata_flags = self.analyze_metadata(metadata)
         else:
-            self.score += 3
-            metadata_flags = [{"text": "No metadata found — may have been stripped", "severity": "high", "points": 3}]
+            metadata_flags = [{"text": "No metadata found — may have been stripped", "severity": "info", "points": 0}]
 
         # ELA analysis
         ela_result = self.perform_ela()

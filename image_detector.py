@@ -132,9 +132,9 @@ class ImageDetector:
         """
         print(f"Analyzing image: {image_source}", file=sys.stderr)
         
-        # Make a single combined request to Sightengine for all models
-        print("Running combined Sightengine analysis...", file=sys.stderr)
-        combined_response = self._make_request(image_source, "deepfake,genai,quality,scam")
+        # Make a single combined request to API for all models
+        print("Running combined analysis...", file=sys.stderr)
+        combined_response = self._make_request(image_source, "deepfake,genai,quality,scam,weapon")
         
         results = {
             'image_source': str(image_source),
@@ -173,6 +173,67 @@ class ImageDetector:
                 },
                 'faces': combined_response.get('scam', {}).get('faces', [])
             }
+            
+            # 5. Weapon Detection
+            weapon_info = combined_response.get('weapon', {})
+            classes = weapon_info.get('classes', {})
+            
+            detections = []
+            classes_found = set()
+            anomalies = []
+            
+            class_mapping = {
+                'firearm': 'Pistol',
+                'knife': 'Knife',
+                'firearm_gesture': 'Unknown',
+                'firearm_toy': 'Unknown'
+            }
+            
+            DETECTION_THRESHOLD = 0.2
+            
+            for se_class, score in classes.items():
+                if score >= DETECTION_THRESHOLD:
+                    frontend_class = class_mapping.get(se_class, 'Unknown')
+                    conf_percent = round(score * 100, 2)
+                    
+                    detections.append({
+                        'class': frontend_class,
+                        'confidence': conf_percent,
+                        'bbox': {
+                            'x': 50.0,
+                            'y': 50.0,
+                            'width': 100.0,
+                            'height': 100.0
+                        }
+                    })
+                    
+                    if frontend_class != 'Unknown':
+                        classes_found.add(frontend_class)
+                    else:
+                        readable_name = se_class.replace('_', ' ').title()
+                        classes_found.add(readable_name)
+                    
+                    if score >= 0.8:
+                        anomalies.append(f"{frontend_class} ({se_class}) detected with {conf_percent:.1f}% confidence — high certainty threat")
+                    else:
+                        anomalies.append(f"{frontend_class} ({se_class}) detected with {conf_percent:.1f}% confidence")
+            
+            weapons_found = any(classes.get(w, 0.0) >= DETECTION_THRESHOLD for w in ['firearm', 'knife'])
+            
+            results['weapon_detection'] = {
+                'weaponsFound': weapons_found,
+                'weaponsDetected': list(classes_found),
+                'detections': detections,
+                'anomalies': anomalies,
+                'totalDetections': len(detections),
+                'rawResult': {
+                    'model': 'Cloud Verification Engine (weapon)',
+                    'total_detections': len(detections),
+                    'classes': list(classes_found),
+                    'confidence_threshold': DETECTION_THRESHOLD,
+                    'raw_response': combined_response
+                }
+            }
         else:
             # Fallback to empty default/error responses
             err_msg = combined_response.get('error', 'API Request Failed')
@@ -182,9 +243,18 @@ class ImageDetector:
             results['ai_generated'] = {'status': 'error', 'error': err_msg}
             results['quality'] = {'status': 'error', 'error': err_msg}
             results['scammer'] = {'status': 'error', 'error': err_msg}
+            results['weapon_detection'] = {
+                'weaponsFound': False,
+                'weaponsDetected': [],
+                'detections': [],
+                'anomalies': [f"Error running weapon detection: {err_msg}"],
+                'totalDetections': 0,
+                'rawResult': None
+            }
             
         print("Analysis complete", file=sys.stderr)
         return results
+
     
     def generate_report(self, results: Dict) -> str:
         """

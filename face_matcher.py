@@ -882,25 +882,35 @@ class FaceMatcher:
                     if best_match is not None and calculated_distance <= threshold and best_similarity >= 0.35:
                         match_found = True
                         
-                        # Double-check: fetch full record from database on-demand to guarantee image_base64 is present and fresh!
+                        # Prefer Cloudinary URL to avoid sending raw base64 through the API
+                        db_image_url = best_match.get('image_url')  # Cloudinary CDN URL
                         db_image_base64 = best_match.get('image_base64')
                         try:
-                            if not db_image_base64:
+                            if not db_image_url and not db_image_base64:
                                 db_person = _get_db_mgr().get_person_by_name(best_match['person_name'])
                                 if db_person:
+                                    db_image_url = db_person.get('image_url')
                                     db_image_base64 = db_person.get('image_base64')
                         except Exception as fetch_err:
                             print(f"Fallback fetch db image warning: {fetch_err}")
                             
-                        # Standardize base64 prefix
-                        if db_image_base64 and not db_image_base64.startswith('data:'):
-                            db_image_base64 = f"data:image/jpeg;base64,{db_image_base64}"
+                        # Standardize: prefer CDN URL, fall back to base64
+                        if db_image_url:
+                            # Return CDN URL directly — no base64 encoding overhead
+                            original_image = db_image_url
+                        elif db_image_base64:
+                            if not db_image_base64.startswith('data:'):
+                                original_image = f"data:image/jpeg;base64,{db_image_base64}"
+                            else:
+                                original_image = db_image_base64
+                        else:
+                            original_image = None
                             
                         match_info = {
                             'identity': f"database/{best_match['person_name']}.jpg",
                             'distance': calculated_distance,
                             'person_name': best_match['person_name'],
-                            'original_image_base64': db_image_base64,
+                            'original_image_base64': original_image,
                             'metadata': {
                                 'name': best_match.get('name'),
                                 'age': best_match.get('age'),
