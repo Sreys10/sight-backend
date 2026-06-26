@@ -13,20 +13,21 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
-# Apply ONNXRuntime memory-saving thread limits globally via monkey-patch
+# Apply ONNXRuntime memory-saving thread limits globally via class monkey-patch
 try:
     import onnxruntime
     _original_InferenceSession = onnxruntime.InferenceSession
     
-    def _patched_InferenceSession(path_or_bytes, sess_options=None, *args, **kwargs):
-        if sess_options is None:
-            sess_options = onnxruntime.SessionOptions()
-        sess_options.intra_op_num_threads = 1
-        sess_options.inter_op_num_threads = 1
-        sess_options.execution_mode = onnxruntime.ExecutionMode.ORT_SEQUENTIAL
-        return _original_InferenceSession(path_or_bytes, sess_options=sess_options, *args, **kwargs)
-        
-    onnxruntime.InferenceSession = _patched_InferenceSession
+    class _PatchedInferenceSession(_original_InferenceSession):
+        def __init__(self, path_or_bytes, sess_options=None, *args, **kwargs):
+            if sess_options is None:
+                sess_options = onnxruntime.SessionOptions()
+            sess_options.intra_op_num_threads = 1
+            sess_options.inter_op_num_threads = 1
+            sess_options.execution_mode = onnxruntime.ExecutionMode.ORT_SEQUENTIAL
+            super().__init__(path_or_bytes, sess_options=sess_options, *args, **kwargs)
+            
+    onnxruntime.InferenceSession = _PatchedInferenceSession
 except Exception:
     pass
 
