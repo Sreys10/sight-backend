@@ -1007,26 +1007,33 @@ class FaceMatcher:
                                 best_match = matches[0]
                                 match_found = True
                                 
-                                # Try to load original image from database metadata
+                                # Try to load original image from database (prefer Cloudinary URL, fall back to base64)
                                 original_image_base64 = None
+                                image_url = None
                                 try:
                                     db_person = _get_db_mgr().get_person_by_name(best_match['person_name'])
-                                    if db_person and db_person.get('image_base64'):
-                                        original_image_base64 = db_person['image_base64']
+                                    if db_person:
+                                        image_url = db_person.get('image_url')  # Cloudinary CDN URL
+                                        db_b64 = db_person.get('image_base64')
+                                        if db_b64:
+                                            if not db_b64.startswith('data:'):
+                                                original_image_base64 = f"data:image/jpeg;base64,{db_b64}"
+                                            else:
+                                                original_image_base64 = db_b64
                                 except Exception:
                                     pass
                                 
-                                # FALLBACK: Read local file from disk if database metadata is missing!
-                                if not original_image_base64:
-                                    original_image_base64 = self._file_path_to_base64(best_match['image_path'])
-                                    
-                                if original_image_base64 and not original_image_base64.startswith('data:'):
-                                    original_image_base64 = f"data:image/jpeg;base64,{original_image_base64}"
+                                # FALLBACK: Read local file from disk if both DB fields are missing
+                                if not image_url and not original_image_base64:
+                                    raw = self._file_path_to_base64(best_match['image_path'])
+                                    if raw:
+                                        original_image_base64 = f"data:image/jpeg;base64,{raw}" if not raw.startswith('data:') else raw
                                 
                                 match_info = {
                                     'identity': best_match['image_path'],
                                     'distance': best_match['distance'],
                                     'person_name': best_match['person_name'],
+                                    'image_url': image_url,
                                     'original_image_base64': original_image_base64,
                                     'metadata': best_match.get('metadata', {})
                                 }
@@ -1050,13 +1057,20 @@ class FaceMatcher:
                                     match_found = True
                                     person_name = os.path.basename(best['identity']).split('.')[0]
                                     
-                                    # Fetch image_base64 and metadata from PostgreSQL database by name!
+                                    # Fetch image_url (Cloudinary) AND image_base64 from PostgreSQL
+                                    db_image_url = None
                                     db_image_base64 = None
                                     db_metadata = {}
                                     try:
                                         db_person = _get_db_mgr().get_person_by_name(person_name)
                                         if db_person:
-                                            db_image_base64 = db_person.get('image_base64')
+                                            db_image_url = db_person.get('image_url')  # Cloudinary CDN URL
+                                            raw_b64 = db_person.get('image_base64')
+                                            if raw_b64:
+                                                if not raw_b64.startswith('data:'):
+                                                    db_image_base64 = f"data:image/jpeg;base64,{raw_b64}"
+                                                else:
+                                                    db_image_base64 = raw_b64
                                             db_metadata = {
                                                 'name': db_person.get('name'),
                                                 'age': db_person.get('age'),
@@ -1069,13 +1083,11 @@ class FaceMatcher:
                                     except Exception as db_err:
                                         print(f"DeepFace.find db fetch error: {db_err}")
                                         
-                                    if db_image_base64 and not db_image_base64.startswith('data:'):
-                                        db_image_base64 = f"data:image/jpeg;base64,{db_image_base64}"
-                                        
                                     match_info = {
                                         'identity': best['identity'],
                                         'distance': float(best['distance']),
                                         'person_name': person_name,
+                                        'image_url': db_image_url,
                                         'original_image_base64': db_image_base64,
                                         'metadata': db_metadata
                                     }

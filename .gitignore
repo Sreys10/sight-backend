@@ -26,3 +26,6 @@ faiss_index.bin
 faiss_metadata.json
 database_metadata.json
 
+# Local face biometrics storage
+storage/
+
