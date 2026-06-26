@@ -171,20 +171,26 @@ async def weapon_detect_endpoint(
 
 @router.post("/metadata/analyze")
 async def analyze_metadata_endpoint(
-    image: Optional[UploadFile] = File(None, description="Image to analyze"),
-    payload: Optional[MetadataAnalyzeRequest] = None,
+    request: Request,
     api_key: str = Depends(verify_api_key)
 ):
     """Hybrid forensic analysis: metadata extraction + ELA (Error Level Analysis) + PRNU noise check."""
     try:
-        from app import HybridForensicAnalyzer
+        from forensic_analyzer import HybridForensicAnalyzer
     except ImportError:
         raise HTTPException(status_code=503, detail="Hybrid Forensic Analyzer is not available on this server.")
 
     temp_path = None
     try:
+        content_type = request.headers.get("content-type", "")
+        
         # Option A: File Upload
-        if image is not None:
+        if "multipart/form-data" in content_type:
+            form = await request.form()
+            image = form.get("image")
+            if not image or not hasattr(image, "filename"):
+                raise HTTPException(status_code=400, detail="No valid image file provided.")
+                
             ext = os.path.splitext(image.filename or "")[1] or ".jpg"
             with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp_file:
                 contents = await image.read()
@@ -192,8 +198,12 @@ async def analyze_metadata_endpoint(
                 temp_path = tmp_file.name
                 
         # Option B: Base64 string in JSON payload
-        elif payload is not None and payload.image:
-            image_data = payload.image
+        elif "application/json" in content_type:
+            payload = await request.json()
+            image_data = payload.get("image")
+            if not image_data:
+                raise HTTPException(status_code=400, detail="No image payload provided.")
+                
             if ',' in image_data:
                 image_data = image_data.split(',', 1)[1]
             image_bytes = base64.b64decode(image_data)
