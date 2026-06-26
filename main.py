@@ -1,10 +1,34 @@
 import os
+# Force 1 thread for all underlying math/ML libraries to prevent memory OOM on Render
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
+os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
+os.environ["NUMEXPR_NUM_THREADS"] = "1"
+
 import sys
 import logging
 from dotenv import load_dotenv
 
 # Load environment variables
 load_dotenv()
+
+# Apply ONNXRuntime memory-saving thread limits globally via monkey-patch
+try:
+    import onnxruntime
+    _original_InferenceSession = onnxruntime.InferenceSession
+    
+    def _patched_InferenceSession(path_or_bytes, sess_options=None, *args, **kwargs):
+        if sess_options is None:
+            sess_options = onnxruntime.SessionOptions()
+        sess_options.intra_op_num_threads = 1
+        sess_options.inter_op_num_threads = 1
+        sess_options.execution_mode = onnxruntime.ExecutionMode.ORT_SEQUENTIAL
+        return _original_InferenceSession(path_or_bytes, sess_options=sess_options, *args, **kwargs)
+        
+    onnxruntime.InferenceSession = _patched_InferenceSession
+except Exception:
+    pass
 
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
@@ -38,7 +62,7 @@ def download_model_if_needed(model_name: str, root_dir: str):
     
     # Key files to check if already present
     key_files = ["det_500m.onnx" if model_name == "buffalo_s" else "det_10g.onnx", 
-                 "w600k_mobi.onnx" if model_name == "buffalo_s" else "w600k_r50.onnx"]
+                 "w600k_mbf.onnx" if model_name == "buffalo_s" else "w600k_r50.onnx"]
     
     files_exist = os.path.exists(model_dir) and all(
         os.path.exists(os.path.join(model_dir, f)) for f in key_files
