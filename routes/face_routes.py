@@ -95,9 +95,10 @@ async def register_person(
         logger.error(f"Database unavailable: {str(db_err)}")
         raise HTTPException(status_code=503, detail="Database unavailable. Please check backend connection.")
 
-    # Retrieve InsightFace app from state
-    face_app = getattr(request.app.state, "face_analysis", None)
-    if face_app is None:
+    # Retrieve OpenCV YuNet detector and SFace recognizer from state
+    face_detector = getattr(request.app.state, "face_detector", None)
+    face_recognizer = getattr(request.app.state, "face_recognizer", None)
+    if face_detector is None or face_recognizer is None:
         raise HTTPException(status_code=500, detail="Face recognition model not loaded on server.")
 
     # Look up existing person or create new to prevent duplicates
@@ -137,9 +138,9 @@ async def register_person(
             ext = validate_upload(upload_file)
             img = await read_image_from_upload(upload_file)
             
-            # Detect faces using InsightFace
+            # Detect faces using OpenCV YuNet
             inference_start = time.time()
-            faces = detect_faces(face_app, img)
+            faces = detect_faces(face_detector, img)
             inference_time = (time.time() - inference_start) * 1000
             logger.info(f"Image {idx+1} detected {len(faces)} face(s) in {inference_time:.1f}ms")
             
@@ -155,8 +156,8 @@ async def register_person(
                     detail=f"Multiple faces found in image {idx+1} ({upload_file.filename}). Registration photos must contain exactly one face."
                 )
                 
-            # Extract normalized embedding
-            embedding = extract_face_embedding(faces[0])
+            # Extract normalized 128-dim embedding using SFace
+            embedding = extract_face_embedding(face_recognizer, img, faces[0])
             
             # Save the file to unique name in /storage/faces/
             unique_filename = f"{person.id}_{uuid.uuid4().hex}{ext}"
@@ -220,9 +221,10 @@ async def search_faces_endpoint(
         logger.error(f"Database unavailable: {str(db_err)}")
         raise HTTPException(status_code=503, detail="Database unavailable. Please check backend connection.")
 
-    # Retrieve InsightFace app
-    face_app = getattr(request.app.state, "face_analysis", None)
-    if face_app is None:
+    # Retrieve OpenCV YuNet detector and SFace recognizer from state
+    face_detector = getattr(request.app.state, "face_detector", None)
+    face_recognizer = getattr(request.app.state, "face_recognizer", None)
+    if face_detector is None or face_recognizer is None:
         raise HTTPException(status_code=500, detail="Face recognition model not loaded on server.")
 
     # Read image
@@ -231,7 +233,7 @@ async def search_faces_endpoint(
     
     # Detect all faces
     inference_start = time.time()
-    faces = detect_faces(face_app, img)
+    faces = detect_faces(face_detector, img)
     inference_time = (time.time() - inference_start) * 1000
     
     logger.info(f"Search request: detected {len(faces)} face(s) in {inference_time:.1f}ms inference time")
@@ -239,10 +241,12 @@ async def search_faces_endpoint(
     results = []
     
     for idx, face in enumerate(faces):
-        bbox = [int(coord) for coord in face.bbox]
+        # YuNet returns [x, y, w, h] — convert to [x1, y1, x2, y2] for frontend
+        x, y, w, h = int(face[0]), int(face[1]), int(face[2]), int(face[3])
+        bbox = [x, y, x + w, y + h]
         
         try:
-            embedding = extract_face_embedding(face)
+            embedding = extract_face_embedding(face_recognizer, img, face)
         except Exception as emb_err:
             logger.warning(f"Failed to extract embedding for face {idx}: {str(emb_err)}")
             results.append({
@@ -328,4 +332,38 @@ def list_registered_persons(db: Session = Depends(get_db)):
     except Exception as e:
         logger.error(f"Error listing database faces: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Database list failed: {str(e)}")
+
+
+@router.delete("/delete/{person_id}")
+def delete_person_endpoint(person_id: str, db: Session = Depends(get_db)):
+    """Delete a person and all their associated face embeddings from database and disk."""
+    try:
+        person = db.query(Person).filter(Person.id == person_id).first()
+        if not person:
+            raise HTTPException(status_code=404, detail="Person not found.")
+        
+        # 1. Clean up images on disk
+        embs = db.query(FaceEmbedding).filter(FaceEmbedding.person_id == person.id).all()
+        for emb in embs:
+            disk_path = os.path.join(STORAGE_DIR, emb.image_path)
+            if os.path.exists(disk_path):
+                try:
+                    os.remove(disk_path)
+                except Exception as file_err:
+                    logger.warning(f"Failed to remove file {disk_path}: {str(file_err)}")
+        
+        # 2. Delete Person from DB (cascades to embeddings)
+        db.delete(person)
+        db.commit()
+        
+        return {
+            "success": True,
+            "message": f"Successfully deleted person {person_id} and all associated face data."
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting person: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete person: {str(e)}")
+
 

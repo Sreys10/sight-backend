@@ -1,35 +1,11 @@
 import os
-# Force 1 thread for all underlying math/ML libraries to prevent memory OOM on Render
-os.environ["OMP_NUM_THREADS"] = "1"
-os.environ["MKL_NUM_THREADS"] = "1"
-os.environ["OPENBLAS_NUM_THREADS"] = "1"
-os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
-os.environ["NUMEXPR_NUM_THREADS"] = "1"
-
 import sys
+import cv2
 import logging
 from dotenv import load_dotenv
 
 # Load environment variables
 load_dotenv()
-
-# Apply ONNXRuntime memory-saving thread limits globally via class monkey-patch
-try:
-    import onnxruntime
-    _original_InferenceSession = onnxruntime.InferenceSession
-    
-    class _PatchedInferenceSession(_original_InferenceSession):
-        def __init__(self, path_or_bytes, sess_options=None, *args, **kwargs):
-            if sess_options is None:
-                sess_options = onnxruntime.SessionOptions()
-            sess_options.intra_op_num_threads = 1
-            sess_options.inter_op_num_threads = 1
-            sess_options.execution_mode = onnxruntime.ExecutionMode.ORT_SEQUENTIAL
-            super().__init__(path_or_bytes, sess_options=sess_options, *args, **kwargs)
-            
-    onnxruntime.InferenceSession = _PatchedInferenceSession
-except Exception:
-    pass
 
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
@@ -49,58 +25,45 @@ logging.basicConfig(
 )
 logger = logging.getLogger("face_recognition")
 
-def download_model_if_needed(model_name: str, root_dir: str):
+def download_opencv_models(root_dir: str):
     """
-    Download and extract the InsightFace model package in chunks to keep memory usage low.
+    Download OpenCV YuNet (face detection) and SFace (face recognition) ONNX models
+    in chunks to keep memory usage low.
     """
-    import zipfile
     import urllib.request
     
-    # Expand user home if ~ is used
-    expanded_root = os.path.expanduser(root_dir)
-    models_dir = os.path.join(expanded_root, "models")
-    model_dir = os.path.join(models_dir, model_name)
+    os.makedirs(root_dir, exist_ok=True)
     
-    # Key files to check if already present
-    key_files = ["det_500m.onnx" if model_name == "buffalo_s" else "det_10g.onnx", 
-                 "w600k_mbf.onnx" if model_name == "buffalo_s" else "w600k_r50.onnx"]
+    models = {
+        # Official OpenCV Hugging Face repositories (bypasses Git LFS issue on opencv_zoo GitHub)
+        "face_detection_yunet_2023mar.onnx": "https://huggingface.co/opencv/face_detection_yunet/resolve/main/face_detection_yunet_2023mar.onnx",
+        "face_recognition_sface_2021dec.onnx": "https://huggingface.co/opencv/face_recognition_sface/resolve/main/face_recognition_sface_2021dec.onnx"
+    }
     
-    files_exist = os.path.exists(model_dir) and all(
-        os.path.exists(os.path.join(model_dir, f)) for f in key_files
-    )
-    
-    if not files_exist:
-        logger.info(f"Model '{model_name}' not found locally at '{model_dir}'. Downloading...")
-        os.makedirs(models_dir, exist_ok=True)
-        zip_path = os.path.join(models_dir, f"{model_name}.zip")
-        url = f"https://github.com/deepinsight/insightface/releases/download/v0.7/{model_name}.zip"
-        
-        try:
-            logger.info(f"Downloading model zip from {url}...")
-            with urllib.request.urlopen(url) as response, open(zip_path, 'wb') as out_file:
-                chunk_size = 1024 * 1024  # 1MB chunks
-                while True:
-                    chunk = response.read(chunk_size)
-                    if not chunk:
-                        break
-                    out_file.write(chunk)
-                    
-            logger.info("Download complete. Extracting model files...")
-            os.makedirs(model_dir, exist_ok=True)
-            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-                zip_ref.extractall(model_dir)
-                
-            os.remove(zip_path)
-            logger.info(f"✓ Model '{model_name}' successfully downloaded and extracted.")
-        except Exception as e:
-            logger.error(f"Failed to download/extract model '{model_name}': {str(e)}")
-            if os.path.exists(zip_path):
-                try:
-                    os.remove(zip_path)
-                except:
-                    pass
-    else:
-        logger.info(f"✓ Model '{model_name}' is already cached in '{model_dir}'.")
+    for filename, url in models.items():
+        filepath = os.path.join(root_dir, filename)
+        if not os.path.exists(filepath):
+            logger.info(f"Downloading OpenCV face model '{filename}' from {url}...")
+            tmp_filepath = filepath + ".tmp"
+            try:
+                with urllib.request.urlopen(url) as response, open(tmp_filepath, 'wb') as out_file:
+                    chunk_size = 1024 * 1024  # 1MB chunks
+                    while True:
+                        chunk = response.read(chunk_size)
+                        if not chunk:
+                            break
+                        out_file.write(chunk)
+                os.rename(tmp_filepath, filepath)
+                logger.info(f"✓ Model '{filename}' downloaded successfully.")
+            except Exception as e:
+                logger.error(f"Failed to download '{filename}': {str(e)}")
+                if os.path.exists(tmp_filepath):
+                    try:
+                        os.remove(tmp_filepath)
+                    except:
+                        pass
+        else:
+            logger.info(f"✓ Model '{filename}' is already cached.")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -111,40 +74,45 @@ async def lifespan(app: FastAPI):
     init_db()
     
     # 2. Get model configuration from environment
-    model_name = os.getenv("INSIGHTFACE_MODEL", "buffalo_s")
-    model_root = os.getenv("INSIGHTFACE_ROOT", "./.insightface")
+    model_root = os.getenv("OPENCV_MODEL_ROOT", "./.opencv_models")
     
-    # 3. Initialize InsightFace model
+    # 3. Initialize OpenCV YuNet & SFace models
     try:
-        import onnxruntime
+        # Pre-download models if missing
+        download_opencv_models(model_root)
         
-        # Pre-download the model if not present using our memory-efficient chunked downloader
-        download_model_if_needed(model_name, model_root)
+        det_model_path = os.path.join(model_root, "face_detection_yunet_2023mar.onnx")
+        rec_model_path = os.path.join(model_root, "face_recognition_sface_2021dec.onnx")
         
-        from insightface.app import FaceAnalysis
-        
-        # Check GPU availability
-        available_providers = onnxruntime.get_available_providers()
-        logger.info(f"Available ONNXRuntime providers: {available_providers}")
-        
-        if "CUDAExecutionProvider" in available_providers:
-            ctx_id = 0
-            logger.info("✓ CUDA GPU detected! InsightFace will run on GPU.")
-        else:
-            ctx_id = -1
-            logger.info("CUDA GPU not detected. InsightFace will run on CPU.")
+        if os.path.exists(det_model_path) and os.path.exists(rec_model_path):
+            # Create FaceDetectorYN singleton (with standard default parameters)
+            detector = cv2.FaceDetectorYN.create(
+                model=det_model_path,
+                config="",
+                input_size=(320, 320),
+                score_threshold=0.5,
+                nms_threshold=0.3,
+                top_k=5000
+            )
             
-        # Initialize FaceAnalysis with the dynamic model, only loading detection and recognition
-        face_app = FaceAnalysis(name=model_name, root=model_root, allowed_modules=['detection', 'recognition'])
-        face_app.prepare(ctx_id=ctx_id, det_size=(640, 640))
-        
-        # Store in app state to be accessed as a singleton in routes
-        app.state.face_analysis = face_app
-        logger.info(f"✓ InsightFace model '{model_name}' successfully loaded in memory.")
-        
+            # Create FaceRecognizerSF singleton
+            recognizer = cv2.FaceRecognizerSF.create(
+                model=rec_model_path,
+                config=""
+            )
+            
+            app.state.face_detector = detector
+            app.state.face_recognizer = recognizer
+            logger.info("✓ OpenCV YuNet & SFace models successfully loaded.")
+        else:
+            logger.critical("✗ Required OpenCV face models are missing from cache.")
+            app.state.face_detector = None
+            app.state.face_recognizer = None
+            
     except Exception as e:
-        logger.critical(f"✗ Failed to load InsightFace model: {str(e)}")
-        app.state.face_analysis = None
+        logger.critical(f"✗ Failed to load OpenCV face models: {str(e)}")
+        app.state.face_detector = None
+        app.state.face_recognizer = None
         
     yield
     
@@ -179,21 +147,21 @@ app.include_router(forensic_router)
 @app.get("/health")
 def health_check():
     """Health check endpoint."""
-    model_loaded = False
-    if hasattr(app.state, "face_analysis") and app.state.face_analysis is not None:
-        model_loaded = True
+    face_detector = getattr(app.state, "face_detector", None)
+    face_recognizer = getattr(app.state, "face_recognizer", None)
+    model_loaded = face_detector is not None and face_recognizer is not None
         
     return {
         "status": "healthy" if model_loaded else "degraded",
         "service": "face_recognition",
         "model_loaded": model_loaded,
-        "onnx_providers": getattr(sys.modules.get("onnxruntime"), "get_available_providers", lambda: [])()
+        "backend": "OpenCV YuNet + SFace"
     }
 
 if __name__ == "__main__":
     import uvicorn
     # Allow port to be configurable via PORT environment variable, defaults to 8000
     # In production, Render/Railway injects PORT
-    port = int(os.getenv("PORT", 8000))
+    port = int(os.getenv("PORT", 5001))
     logger.info(f"Starting server on port {port}...")
     uvicorn.run("main:app", host="0.0.0.0", port=port, reload=False)

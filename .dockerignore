@@ -11,6 +11,7 @@ ENV
 .env
 .env.local
 .insightface/
+.opencv_models/
 storage/
 database/*.jpg
 database/*.jpeg

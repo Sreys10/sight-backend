@@ -21,13 +21,14 @@ COPY requirements.txt .
 # Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Pre-download and extract InsightFace buffalo_s model during Docker build to optimize container startup time
-RUN apt-get update && apt-get install -y --no-install-recommends curl unzip \
-    && mkdir -p /app/.insightface/models \
-    && curl -L https://github.com/deepinsight/insightface/releases/download/v0.7/buffalo_s.zip -o /app/.insightface/models/buffalo_s.zip \
-    && unzip -q /app/.insightface/models/buffalo_s.zip -d /app/.insightface/models/buffalo_s \
-    && rm /app/.insightface/models/buffalo_s.zip \
-    && apt-get purge -y --auto-remove curl unzip \
+# Pre-download OpenCV YuNet (385KB) and SFace (36MB) models at build time
+RUN apt-get update && apt-get install -y --no-install-recommends curl \
+    && mkdir -p /app/.opencv_models \
+    && curl -L "https://huggingface.co/opencv/face_detection_yunet/resolve/main/face_detection_yunet_2023mar.onnx" \
+         -o /app/.opencv_models/face_detection_yunet_2023mar.onnx \
+    && curl -L "https://huggingface.co/opencv/face_recognition_sface/resolve/main/face_recognition_sface_2021dec.onnx" \
+         -o /app/.opencv_models/face_recognition_sface_2021dec.onnx \
+    && apt-get purge -y --auto-remove curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy application code

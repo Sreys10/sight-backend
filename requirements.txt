@@ -12,7 +12,5 @@ fastapi>=0.100.0
 uvicorn>=0.22.0
 sqlalchemy>=2.0.0
 pgvector>=0.2.0
-insightface>=0.7.3
-onnxruntime>=1.15.0
 pydantic>=2.0.0
 python-multipart>=0.0.6

@@ -31,3 +31,6 @@ storage/
 
 # InsightFace model cache
 .insightface/
+
+# OpenCV model cache
+.opencv_models/

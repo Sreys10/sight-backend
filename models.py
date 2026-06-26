@@ -26,7 +26,7 @@ class FaceEmbedding(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, server_default=text("gen_random_uuid()"))
     person_id = Column(UUID(as_uuid=True), ForeignKey("person.id", ondelete="CASCADE"), nullable=False)
     image_path = Column(String, nullable=False)
-    embedding = Column(Vector(512), nullable=False)  # 512-dimensional ArcFace vector
+    embedding = Column(Vector(128), nullable=False)  # 128-dimensional SFace vector
     created_at = Column(DateTime(timezone=True), server_default=text("now()"))
 
     # Relationship to Person

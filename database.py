@@ -35,6 +35,30 @@ def init_db() -> None:
             logger.info("Enabling pgvector extension in database...")
             conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
         
+        # Auto-migrate: check if the face_embedding table already exists and has the old 512 dimension
+        try:
+            with engine.begin() as conn:
+                table_exists = conn.execute(text("""
+                    SELECT EXISTS (
+                        SELECT FROM information_schema.tables 
+                        WHERE table_name = 'face_embedding'
+                    );
+                """)).scalar()
+                
+                if table_exists:
+                    dim = conn.execute(text("""
+                        SELECT atttypmod FROM pg_attribute 
+                        WHERE attrelid = 'face_embedding'::regclass AND attname = 'embedding';
+                    """)).scalar()
+                    
+                    if dim is not None and dim != 128:
+                        logger.warning(f"Database pgvector dimension mismatch (found {dim}, expected 128). Dropping tables for migration...")
+                        conn.execute(text("DROP TABLE IF EXISTS face_embedding CASCADE;"))
+                        conn.execute(text("DROP TABLE IF EXISTS person CASCADE;"))
+                        logger.info("✓ Old 512-dimensional tables dropped successfully.")
+        except Exception as check_err:
+            logger.warning(f"Could not perform database dimension check: {str(check_err)}")
+            
         # Create all tables defined in models.py
         logger.info("Creating database tables...")
         Base.metadata.create_all(bind=engine)
