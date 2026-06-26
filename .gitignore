@@ -29,3 +29,5 @@ database_metadata.json
 # Local face biometrics storage
 storage/
 
+# InsightFace model cache
+.insightface/
